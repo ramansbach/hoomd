@@ -3,9 +3,12 @@
 #More work will have to be done to properly import topology (bond, angle, dihedral connectivities, etc)
 #using Debug
 module groread
+using Debug
 export readGro
 export readTop
 export gro2xml
+export nonbonded
+export readFF
 function readGro(filename)
 	#function that reads a gro file of specified name and returns a tuple containing number of atoms, box size, and arrays of atom name, position, and velocity, and an array of atom labels
 	#right now this assumes all atoms are their own molecules
@@ -29,7 +32,31 @@ function readGro(filename)
 	return (natoms,box,posvel,labels)
 end
 
-function readTop(filename)
+function conParse(conmat,bnum)
+	#helper function for readTop that takes a matrix of constraints between bonds where the third column is constraint length and a starting index bnum, and returns a list of lines of the form "c" bnum, "c"bnum+1 with the bonds labeled and the indices labeled based on which constraint lengths match each other
+	#this function is only useful if constraints are being tabulated the same as bonds are 
+	ulist = unique(conmat[:,3])
+	conlist = Array(Any,size(conmat,1),3)
+	for i = 1:size(conmat,1)
+		ind = findind(conmat[i,3],ulist)+bnum
+		conlist[i,2] = round(Int,conmat[i,1])
+		conlist[i,3] = round(Int,conmat[i,2])
+		conlist[i,1] = "c"*string(ind)
+	end
+	return conlist
+end
+
+function findind(x::Float64,list::Array{Float64,1})
+	#helper function that returns the (first) index of a float in a float array
+	for i = 1:size(list,1)
+		if list[i]==x
+			return i
+		end
+	end
+	return 0
+end
+
+@debug function readTop(filename)
 	#reads a .top or .itp file and returns an array of atoms including important properties, and arrays of bonds, angles, and dihedrals along with names (#s corresponding to index of atom in molecule
 	f = open(filename)
 	lines = readlines(f)
@@ -44,8 +71,9 @@ function readTop(filename)
 	atomnamelist = Array(AbstractString,bind-aind)
 	bondlist = Array(Any,anind-bind,3)
 	anglist = Array(Any,dind-anind,4)
-	dihlist = Array(Any,size(lines,1)-dind,5)
+	dihlist = Array(Any,size(lines,1)-dind,14)
 	ind = 1
+	#@bp
 	for i = aind:bind-2
 	#parse atom	
 		line = lines[i]
@@ -55,7 +83,8 @@ function readTop(filename)
 		end
 	end
 	atomnamelist = atomnamelist[1:ind-1]
-	
+        #@bp
+	bnum=0	
 	ind = 1
 	for i = bind:cind-2
 	#parse bonds
@@ -63,18 +92,41 @@ function readTop(filename)
 		if length(line) > 1 && line[1] != ';'
 			bondlist[ind,:] = ["b"*split(line)[4] parse(Int,split(line)[1]) parse(Int,split(line)[2])]
 			ind += 1
+#!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!#
+			bnum = parse(Int,split(line)[4])+1 #track final bond number for constraint numbering purposes, right now we're assuming a fair bit about how the bonds and constraints are tabulated, so be careful if we change that
+			#println(bnum)
 		end
+		#println(bnum)
 	end
-	
+	#@bp
+	#println(bnum)
+	conmat = zeros(anind-2-cind,3)
+	cmind = 1
 	for i = cind:anind-2
-		#parse constraints, currently all just to be the same bond label
+		#parse constraints, let's symmetrize them with the ones that have matching constraint lengths so that we can apply tabulated bonds exactly the same as for the bonds
+		#parse in all the constraints at once into a matrix tracking the beads involved and the constraint length
+		
 		line = lines[i]
-		if length(line) > 1 && line[1] != ';'
-			bondlist[ind,:] = ["c0" parse(Int,split(line)[1]) parse(Int,split(line)[2])]
-			ind += 1
+		
+		if length(line) > 1 && line[1]!= ';'
+			conmat[cmind,1] = parse(Float64,split(line)[1])
+			conmat[cmind,2] = parse(Float64,split(line)[2])
+			conmat[cmind,3] = parse(Float64,split(line)[4])
+			#ind+=1
+			cmind+=1
 		end
+		#then have another function that returns constraints numbered with uniqueness
+		#@bp
+		#line = lines[i]
+		#if length(line) > 1 && line[1] != ';'
+		#	bondlist[ind,:] = ["c0" parse(Int,split(line)[1]) parse(Int,split(line)[2])]
+		#	ind += 1
+		#end
 	end
-	bondlist = bondlist[1:ind-1,:]
+	conlist = conParse(conmat,bnum)
+	#@bp
+	bondlist[ind:ind+size(conlist,1)-1,:] = conlist
+	bondlist = bondlist[1:ind+size(conlist,1)-1,:]
 
 	ind = 1
 	for i = anind:dind-2
@@ -88,13 +140,34 @@ function readTop(filename)
 	end
 	anglist = anglist[1:ind-1,:]
 
-	firstcurr = [0 0 0 0]
+	#firstcurr = [0 0 0 0]
 	dnum = 0
 	ind = 1
-	for i = dind:iind-2
-		#parse dihedrals, this part may need to be heavily modified but right now assumes a single dihedral for each set of 4 atoms
+	dind2 = 1
+	for i = dind:size(lines,1)
+		#parse dihedrals, this part may need to be heavily modified but right now assumes a single dihedral for each set of 4 atoms, we're going to need to pull out the dihedral parameters in addition to the dihedral names, each dihedral should have a set of 9 coefficients that can be used to set it properly in the mkhoomdscript file
+		#fortunately, I think I can just staple that extra info onto the side of the dihlist
+		#that means for now we are assuming TYPE NINE dihedrals, meaning there should be NINE entries per dihedral
+		#so all we have to do is keep track of a second dihedral index and reset it if it hits 10 -> 1
+		#assume impropers are identical and parse them the same way
 		line = lines[i]
 		if length(line) > 1 && line[1] != ';'
+		
+		if dind2 == 1
+			dihlist[ind,1:5] = ["d"*string(dnum) parse(Int,split(line)[1]) parse(Int,split(line)[2]) parse(Int,split(line)[3]) parse(Int,split(line)[4])]
+			dihlist[ind,6] = parse(Float64,split(line)[7])
+			dnum += 1
+			dind2 += 1
+		elseif dind2 == 9
+			dihlist[ind,dind2+5] = parse(Float64,split(line)[7])
+			dind2 = 1
+			ind += 1
+		else
+			dihlist[ind,dind2+5] = parse(Float64,split(line)[7])
+			dind2 += 1
+		end
+		end
+		#=if length(line) > 1 && line[1] != ';'
 			curr = [parse(Int,split(line)[1]) parse(Int,split(line)[2]) parse(Int,split(line)[3]) parse(Int,split(line)[4])]
 			if curr != firstcurr
 				firstcurr = curr
@@ -102,8 +175,9 @@ function readTop(filename)
 			ind += 1
 			dnum += 1
 			end 
-		end
+		end=#
 	end
+	#=
 	firstcurr = [0 0 0 0]
 	inum = 0
 	for i = iind:size(lines,1)
@@ -121,6 +195,8 @@ function readTop(filename)
 		end
 		
 	end
+	=#
+	
 	dihlist = dihlist[1:ind-1,:]
 	return (atomnamelist,bondlist,anglist,dihlist)
 
@@ -138,7 +214,19 @@ end
 
 function readFF(fffile,fftype="martini")
 	#function that reads a forcefield file of some type and packages all bead interactions into a dictionary of type Dict{Tuple{ASCIIString,ASCIIString},Tuple(Float64,Float64}}
-	
+	ffdict = Dict(("P5","P5") => (0.0,0.0))
+	ff = open(fffile)
+	fflines = readlines(ff)
+	forcematch = r"\s+[a-zA-Z]+\d*\s+[a-zA-Z]+\d*\s+1\s+\d\.\d+E[-+]\d+\s+\d\.\d+E[-+]\d+.*" #regular expression to match a line of the form "  Na    SN0     1       0.15091E-00     0.16267E-02 ; intermediate"
+	for line in fflines
+		if ismatch(forcematch,line)
+			#we have a parsable line
+			spline = split(line)
+			ffdict[(spline[1],spline[2])] = (float(spline[4]),float(spline[5]))
+		end
+	end
+	close(ff)	
+	return ffdict
 end
 
 function nonbonded(beadlist,ff,fftype="martini")
@@ -152,8 +240,12 @@ function nonbonded(beadlist,ff,fftype="martini")
 		k = 1
 		for i=1:n
 			for j=i:n
-				#check dictionary
+				#check dictionary--both ways round, because only one way round is actually in the dictionary
 				params = get(ff,(beadlist[i],beadlist[j]),0)
+				if params == 0
+					params = get(ff,(beadlist[j],beadlist[i]),0)
+				end
+				
 				if params==0
 					#throw an error, we didn't find this combination in the dictionary
 					println("bead pair not found in forcefield: ($(beadlist[i]),$(beadlist[j]))")
@@ -171,6 +263,8 @@ function nonbonded(beadlist,ff,fftype="martini")
 	end
 	return nonbonded_lines
 end
+
+
 
 
 function gro2xml(infile,topfile,outfile,solvent="W")
