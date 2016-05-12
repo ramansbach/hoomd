@@ -3,7 +3,6 @@
 #More work will have to be done to properly import topology (bond, angle, dihedral connectivities, etc)
 #using Debug
 module groread
-using Debug
 export readGro
 export readTop
 export gro2xml
@@ -56,7 +55,7 @@ function findind(x::Float64,list::Array{Float64,1})
 	return 0
 end
 
-@debug function readTop(filename)
+function readTop(filename)
 	#reads a .top or .itp file and returns an array of atoms including important properties, and arrays of bonds, angles, and dihedrals along with names (#s corresponding to index of atom in molecule
 	f = open(filename)
 	lines = readlines(f)
@@ -290,7 +289,12 @@ function gro2xml(infile,topfile,outfile,solvent="W")
 	listind = 1
 	for i = 1:natoms
 		if is_solvent(labels[i],solvent)
-			println(out,solvent)
+			if solvent=="W"
+				println(out,"P4")
+			else
+				println("using a solvent other than water, behavior not established.")
+			    	println(out,solvent)
+			end
 		else
 			
 			if is_first(labels[i],prev,first)
@@ -332,10 +336,30 @@ function gro2xml(infile,topfile,outfile,solvent="W")
 	println(out,"</dihedral>")
 	println(out,"<position>")
 	for i = 1:natoms
+		#gromacs can have rounding errors such that some of the molecules are slightly out of the box
+		#HOOMD is very very not okay with that! so we need to fix it
+		if posvel[i,1] < 0.0
+			posvel[i,1] = 0.0
+		end
+		if posvel[i,2] < 0.0
+			posvel[i,2] = 0.0
+		end
+		if posvel[i,3] < 0.0
+			posvel[i,3] = 0.0
+		end
+		if posvel[i,1] > box[1]
+			posvel[i,1] = box[1]
+		end
+		if posvel[i,2] > box[2]
+			posvel[i,2] = box[2]
+		end
+		if posvel[i,3] > box[3]
+			posvel[i,3] = box[3]
+		end
+		#gromacs has origin at bottom left, hoomd has origin in center
 		x = posvel[i,1]-box[1]/2
 		y = posvel[i,2]-box[2]/2
 		z = posvel[i,3]-box[3]/2
-		#gromacs has origin at bottom left, hoomd has origin in center
 		println(out,"$(x) $(y) $(z)")
 	end
 	println(out,"</position>")
