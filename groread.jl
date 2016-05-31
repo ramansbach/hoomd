@@ -263,17 +263,87 @@ function nonbonded(beadlist,ff,fftype="martini")
 	return nonbonded_lines
 end
 
+function getmasses(fffile,ff)
+	#returns beads with their mass in a dictionary
+	#currently only set up for martini force field
+	massDict = Dict("P5"=> 1.0)
+	f = open(fffile,"r")
+	line = ""
+	if ff=="martini"
+		while line!="[ nonbond_params ]"
+			line = strip(readline(f))
+			if length(line) > 0
+			if line[1]!=';'#ignore comments
+				spline = split(line)
+				if length(spline) == 6#ignore incorrect sections
+					bead = spline[1]
+					mass = float(spline[2])
+					massDict[bead] = mass
+				end
+				
+			end
+			end
+		end
+	else
+		println("Currently only works for Martini force field.")
+		return Dict()
+	end
+	return massDict
+end
 
+function readGroProtein(solvent,grofile)
+#function that pulls in the protein & parameters from a gro file
+	grof = open(grofile,"r")
+	flag = "BB"
+	lines = readlines(grof)
+	close(grof)
+	i = 3
+	while flag!=solvent
+		spline = split(strip(lines[i]))
+		flag = spline[2]
+		i+=1
+	end
+	protein = Array(Any,(i-2)-2,9)
+	protlines = lines[3:(i-2)]
+	for j = 1:((i-2)-2)
+		#convert to array of strings and floats for easier parsing
+		protein[j,:] = split(strip(protlines[j]))
+	end
+	#return array and index 
+	return (i-2,protein)
+end
 
+function ringToBeadGro(grofile,outgrofile,solvent="W")
+#function that reads in a .gro file and replaces S beads in PHE with a single M1 bead (modifiable parameters)
+#also replaces three beads of COP with M2
+	(ind,protein) = readGroProtein(solvent,grofile)
+	#	
+end
 
-function gro2xml(infile,topfile,outfile,solvent="W")
+function ringToBeadTop(topfile,outtopfile)
+#function that reads in a .top or .itp file and replaces S beads in PHE with a single M1 bead (modifiable parameters)
+#also replaces three beads of COP with M2
+#bonds, angles, and dihedrals all need to be replaced as well
+println("under construction")
+end
+
+function gro2xml(infile,topfile,outfile,solvent="W",ff="martini",fffile="martini.itp")
 	#currently assumes just one type of molecule + solvent
 	(natoms,box,posvel,labels) = readGro(infile)
 	(atomnamelist,bondlist,anglist,dihlist) = readTop(topfile)
+
 	out = open(outfile,"w")
 	println(out,"<?xml version=\"1.0\" encoding=\"UTF-8\"?>")
 	println(out,"<hoomd_xml version=\"1.6\">")
 	println(out,"<!-- generated from file $infile and $topfile by Julia code written by Rachael Mansbach -->")
+	if ff=="martini"
+		massDict = getmasses(fffile,ff)
+		#println(out,"<!--units of mass are 72 amu to get mass to O(1) for Martini -->")
+	else
+		massDict = getmasses(fffile,ff)
+		println("Unknown force field. Behavior may be unexpected.")
+
+	end
 	println(out,"<configuration time_step=\"0\" dimensions=\"3\">")
 	println(out,"<box lx=\"$(box[1])\" ly=\"$(box[2])\" lz=\"$(box[3])\"/>")
 	
@@ -316,6 +386,23 @@ function gro2xml(infile,topfile,outfile,solvent="W")
 		end
 	end
 	println(out,"</type>")
+	println(out,"<mass>")
+	listind=1
+	for i = 1:natoms
+		
+		if is_solvent(labels[i],solvent)
+			if solvent=="W"
+				println(out,massDict["P4"])
+			else
+				println("using a solvent other than water, behavior not established.")
+			    	println(out,solvent)
+			end
+		else
+			println(out,massDict[atomnamelist[listind]])
+			listind+=1	
+		end
+	end
+	println(out,"</mass>")
 	bondout = bondout[1:currindb-1,:]
 	angout = angout[1:currinda-1,:]
 	dihout = dihout[1:currindd-1,:]
@@ -360,6 +447,10 @@ function gro2xml(infile,topfile,outfile,solvent="W")
 		x = posvel[i,1]-box[1]/2
 		y = posvel[i,2]-box[2]/2
 		z = posvel[i,3]-box[3]/2
+		
+		#x = posvel[i,1]
+		#y = posvel[i,2]
+		#z = posvel[i,3]
 		println(out,"$(x) $(y) $(z)")
 	end
 	println(out,"</position>")
