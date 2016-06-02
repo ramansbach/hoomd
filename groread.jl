@@ -342,9 +342,46 @@ function get1314(f,syms)
 	sfile = open(syms,"r")
 	flines = readlines(ffile)
 	slines = readlines(sfile)
+	b1314 = []
+	#create a dictionary out of slines that maps b13_* > b13_*s and b13_* > b14_*s
+	d = Dict("b13_1" => "b13_1s")
+	for sline in slines
+		if contains(sline,"tab b13_")
+			spline = split(sline)
+			splsplinei = split(spline[2],".")
+			for j = 3:length(spline)
+				splspline = split(spline[j],":")
+				d[splspline[2]] = splsplinei[1]
+			end
+		
+		end
+		if contains(sline,"tab b14_")
+			spline = split(sline)
+			splsplinei = split(spline[2],".")
+			for j = 3:length(spline)
+				splspline = split(spline[j],":")
+				d[splspline[2]] = splsplinei[1]
+			end
+		
+		end
+	end
 	close(sfile)
 	close(ffile)
+	for i = 1:size(flines,1)
+		fline = flines[i]
+		if contains(fline,"b13_") || contains(fline,"b14_")
+			bline = split(flines[i+2])
+			m1 = match(r"\d+",bline[1])
+			m2 = match(r"\d+",bline[2])
+			bi1 = m1.match
+			bi2 = m2.match
+			name = match(r"b1\d_\d+",fline)
+			b1314line = [d[name.match]*" "*bi1*" "*bi2]
+			b1314 = append!(b1314,b1314line)
+		end
+	end
 	#get 
+	return b1314
 end
 
 function gro2xml(infile,topfile,outfile;bb1314=false,syms="allinputsym.txt",f1314="mapped.xml",solvent="W",ff="martini",fffile="martini.itp")
@@ -436,7 +473,8 @@ function gro2xml(infile,topfile,outfile;bb1314=false,syms="allinputsym.txt",f131
 	end
 	if bb1314
 		for bond in bonds1314
-			println(out,bond)
+			splbond = split(bond)
+			println(out,"$(splbond[1]) $(parse(Int,splbond[2])-1) $(parse(Int,splbond[3])-1)")
 		end
 	end
 	println(out,"</bond>")
