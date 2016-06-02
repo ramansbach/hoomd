@@ -5,7 +5,7 @@ export scriptwrite
 using groread
 #ffdict = groread.readFF(fffile,"martini")
 
-function scriptwrite(filename,xml,dt,T,tau,outname,fffile,topfile,rcut,steps,therm,rbuff;gamma=0,per=100,rseed=1234,solvent="W",harmcons=0)
+function scriptwrite(filename,xml,dt,T,tau,outname,fffile,topfile,rcut,steps,therm,rbuff;restart="restart.xml",gamma=0,per=100,rseed=1234,solvent="W",harmcons=0)
 #master function to write out a hoomd script assuming martini.itp for nonbonded interactions and tabulated functions for all defined intermolecular bonds
 #right now assumes a lot about the integration that can either be changed directly here or I can make it a little more flexible on a later pass
 #filename is the name of the filename to write (something.hoomd), xml is the name of the input xml file (that should already have been written using groread), dt is the timestep, T is the temperature in K, which currently gets converted to reduced temperature assuming Gromacs units, tau is the temperature coupling constant, and outname is the name to give to the hoomd output files, fffile is the name of the force field file, topfile is the name of the itp topology file, rcut is the LJ cutoff, solvent is the solvent molecule, defaults to W and currently only guaranteed to behave correctly for water
@@ -21,7 +21,7 @@ function scriptwrite(filename,xml,dt,T,tau,outname,fffile,topfile,rcut,steps,the
 	println(f,"from math import *")
 	println(f,"import random")
 	println(f,"context.initialize()")
-	println(f,"system = init.read_xml(filename=\"$xml\")")
+	println(f,"system = init.read_xml(filename=\"$xml\", restart = \"$restart\")")
 	println(f,"n1 = nlist.cell(r_buff=$rbuff)")
 	#define intramolecular bonds
 	
@@ -142,8 +142,9 @@ function scriptwrite(filename,xml,dt,T,tau,outname,fffile,topfile,rcut,steps,the
 		println("Thermometer not recognized.  Behavior may be unpredictable.")
 		println(f,"integrate.nvt(group=all, T=$redT, tau = $tau)")
 	end
-	println(f,"analyze.log(filename='$outname.log',quantities=['potential_energy','kinetic_energy','temperature','pressure'],period=$per)")
-	println(f,"dump.dcd(filename='$outname.dcd',period=$per,unwrap_full=True)")
+	println(f,"xml_restart = dump.xml(filename=\"$restart\",all=True,restart=True,period=$(per*100),phase=0)")
+	println(f,"analyze.log(filename='$outname.log',quantities=['potential_energy','kinetic_energy','temperature','pressure'],period=$per,phase=0)")
+	println(f,"dump.dcd(filename='$outname.dcd',period=$per,unwrap_full=True,phase=0)")
 	println(f,"run($steps)")
 	close(f)
 end
