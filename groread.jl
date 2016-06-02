@@ -3,6 +3,7 @@
 #More work will have to be done to properly import topology (bond, angle, dihedral connectivities, etc)
 #using Debug
 module groread
+using Debug
 export readGro
 export readTop
 export gro2xml
@@ -55,7 +56,7 @@ function findind(x::Float64,list::Array{Float64,1})
 	return 0
 end
 
-function readTop(filename)
+@debug function readTop(filename)
 	#reads a .top or .itp file and returns an array of atoms including important properties, and arrays of bonds, angles, and dihedrals along with names (#s corresponding to index of atom in molecule
 	f = open(filename)
 	lines = readlines(f)
@@ -150,8 +151,14 @@ function readTop(filename)
 		#so all we have to do is keep track of a second dihedral index and reset it if it hits 10 -> 1
 		#assume impropers are identical and parse them the same way
 		line = lines[i]
+		#@bp
 		if length(line) > 1 && line[1] != ';'
-		
+		if length(split(line))!=8
+			println("Error: Formatting is off on line $i of input .itp file.")
+			println("Probably missing carriage return.")
+			println("Line is: $line")
+			return
+		end
 		if dind2 == 1
 			dihlist[ind,1:5] = ["d"*string(dnum) parse(Int,split(line)[1]) parse(Int,split(line)[2]) parse(Int,split(line)[3]) parse(Int,split(line)[4])]
 			dihlist[ind,6] = parse(Float64,split(line)[7])
@@ -327,11 +334,28 @@ function ringToBeadTop(topfile,outtopfile)
 println("under construction")
 end
 
-function gro2xml(infile,topfile,outfile,solvent="W",ff="martini",fffile="martini.itp")
+function get1314(f,syms)
+	#function that returns an array of lines of the form ["name ind1 ind2";"name ind1 ind2";...]
+	#which is a list of all 1-3 and 1-4 bonds that are to be written to the xml file along with the participating beads
+	#assumes that 1-3 bonds are named b13_* and 1-4 bonds are named b14_* in the input xml file f
+	ffile = open(f,"r")
+	sfile = open(syms,"r")
+	flines = readlines(ffile)
+	slines = readlines(sfile)
+	close(sfile)
+	close(ffile)
+	#get 
+end
+
+function gro2xml(infile,topfile,outfile;bb1314=false,syms="allinputsym.txt",f1314="mapped.xml",solvent="W",ff="martini",fffile="martini.itp")
 	#currently assumes just one type of molecule + solvent
+	#if we also want to write in 1-3 and 1-4 bonds, we need to know the table names, and we need to know the correct table symmetries and table orders.  The bonds themselves are written into the mapped.xml file used to pass to VOTCA, while their resulting symmetries show up in the input file passed to VOTCA to write out the tables
 	(natoms,box,posvel,labels) = readGro(infile)
 	(atomnamelist,bondlist,anglist,dihlist) = readTop(topfile)
-
+	if bb1314
+	#we are enforcing 1-3 1-4 bonds or at least putting them into the xml file
+		bonds1314 = get1314(f1314,syms) #this gives a list of lines to be added to the output file
+	end
 	out = open(outfile,"w")
 	println(out,"<?xml version=\"1.0\" encoding=\"UTF-8\"?>")
 	println(out,"<hoomd_xml version=\"1.6\">")
@@ -409,6 +433,11 @@ function gro2xml(infile,topfile,outfile,solvent="W",ff="martini",fffile="martini
 	println(out,"<bond>")
 	for i = 1:size(bondout,1)
 		println(out,"$(bondout[i,1]) $(string(bondout[i,2])) $(string(bondout[i,3]))")
+	end
+	if bb1314
+		for bond in bonds1314
+			println(out,bond)
+		end
 	end
 	println(out,"</bond>")
 	println(out,"<angle>")
