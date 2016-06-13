@@ -9,6 +9,7 @@ export readTop
 export gro2xml
 export nonbonded
 export readFF
+export get1314
 function readGro(filename)
 	#function that reads a gro file of specified name and returns a tuple containing number of atoms, box size, and arrays of atom name, position, and velocity, and an array of atom labels
 	#right now this assumes all atoms are their own molecules
@@ -56,7 +57,7 @@ function findind(x::Float64,list::Array{Float64,1})
 	return 0
 end
 
-@debug function readTop(filename)
+function readTop(filename;dtype="type9",xml="mapped.xml",infile="allinputsym.txt")
 	#reads a .top or .itp file and returns an array of atoms including important properties, and arrays of bonds, angles, and dihedrals along with names (#s corresponding to index of atom in molecule
 	f = open(filename)
 	lines = readlines(f)
@@ -71,7 +72,11 @@ end
 	atomnamelist = Array(AbstractString,bind-aind)
 	bondlist = Array(Any,anind-bind,3)
 	anglist = Array(Any,dind-anind,4)
-	dihlist = Array(Any,size(lines,1)-dind,14)
+	if dtype == "type9plusmartini"
+		dihlist = Array(Any,size(lines,1)-dind,15)
+	else
+		dihlist = Array(Any,size(lines,1)-dind,14)
+	end
 	ind = 1
 	#@bp
 	for i = aind:bind-2
@@ -116,12 +121,6 @@ end
 			cmind+=1
 		end
 		#then have another function that returns constraints numbered with uniqueness
-		#@bp
-		#line = lines[i]
-		#if length(line) > 1 && line[1] != ';'
-		#	bondlist[ind,:] = ["c0" parse(Int,split(line)[1]) parse(Int,split(line)[2])]
-		#	ind += 1
-		#end
 	end
 	conlist = conParse(conmat,bnum)
 	#@bp
@@ -139,7 +138,50 @@ end
 		
 	end
 	anglist = anglist[1:ind-1,:]
-
+	if dtype == "type9plusmartini"
+	#same as type9, except there is an additional flag in the array that says whether the dihedral is proper or improper
+	dnum = 0
+	ind = 1
+	dind2 = 1
+	for i = dind:size(lines,1)
+		#parse dihedrals, this part may need to be heavily modified but right now assumes a single dihedral for each set of 4 atoms, we're going to need to pull out the dihedral parameters in addition to the dihedral names, each dihedral should have a set of 9 coefficients that can be used to set it properly in the mkhoomdscript file
+		#fortunately, I think I can just staple that extra info onto the side of the dihlist
+		#that means for now we are assuming TYPE NINE dihedrals, meaning there should be NINE entries per dihedral
+		#so all we have to do is keep track of a second dihedral index and reset it if it hits 10 -> 1
+		#assume impropers are identical and parse them the same way
+		line = lines[i]
+		#@bp
+		if length(line) > 1 && line[1] != ';'
+		if length(split(line))!=8
+			println("Error: Formatting is off on line $i of input .itp file.")
+			println("Probably missing carriage return.")
+			println("Line is: $line")
+			return
+		end
+		if dind2 == 1
+			dihlist[ind,1:5] = ["d"*string(dnum) parse(Int,split(line)[1]) parse(Int,split(line)[2]) parse(Int,split(line)[3]) parse(Int,split(line)[4])]
+			dihlist[ind,6] = parse(Float64,split(line)[7])
+			dnum += 1
+			dind2 += 1
+		elseif dind2 == 9
+			dihlist[ind,dind2+5] = parse(Float64,split(line)[7])
+			dind2 = 1
+			
+			if i > iind
+				dihlist[ind,15] = "i"			
+			else
+				dihlist[ind,15] = "p"
+			end
+			ind += 1
+		else
+			dihlist[ind,dind2+5] = parse(Float64,split(line)[7])
+			dind2 += 1
+		end
+		end
+	end
+	
+	dihlist = dihlist[1:ind-1,:]
+	elseif dtype == "type9"
 	#firstcurr = [0 0 0 0]
 	dnum = 0
 	ind = 1
@@ -173,39 +215,63 @@ end
 			dind2 += 1
 		end
 		end
-		#=if length(line) > 1 && line[1] != ';'
-			curr = [parse(Int,split(line)[1]) parse(Int,split(line)[2]) parse(Int,split(line)[3]) parse(Int,split(line)[4])]
-			if curr != firstcurr
-				firstcurr = curr
-				dihlist[ind,:] = ["d"*string(dnum) parse(Int,split(line)[1]) parse(Int,split(line)[2]) parse(Int,split(line)[3]) parse(Int,split(line)[4])]
-			ind += 1
-			dnum += 1
-			end 
-		end=#
 	end
-	#=
-	firstcurr = [0 0 0 0]
-	inum = 0
-	for i = iind:size(lines,1)
-		#parse impropers, see notes on dihedrals
-		line = lines[i]
-		
-		if length(line) > 1 && line[1] != ';'
-			curr = [parse(Int,split(line)[1]) parse(Int,split(line)[2]) parse(Int,split(line)[3]) parse(Int,split(line)[4])]
-			if curr != firstcurr
-				firstcurr = curr
-				dihlist[ind,:] = ["i"*string(inum) parse(Int,split(line)[1]) parse(Int,split(line)[2]) parse(Int,split(line)[3]) parse(Int,split(line)[4])]
-			ind+=1
-			inum += 1
-			end 
-		end
-		
-	end
-	=#
 	
 	dihlist = dihlist[1:ind-1,:]
+	elseif dtype == "table"
+		#prepare dihedrals from xml and votca input files for tabulated potentials
+		dihlist = getDihFromXML(xml,infile)
+	else
+		println("Error: indeterminate dihedral type.")
+	end
 	return (atomnamelist,bondlist,anglist,dihlist)
 
+end
+
+function getDihFromXML(xml,infile)
+	#function that returns dih # x 5 matrix of the form [dname b1 b2 b3 b4] for tabulated dihedrals
+	inf = open(infile,"r")
+	inlines = readlines(inf)
+	close(inf)
+	xmlf = open(xml,"r")
+	xmlines = readlines(xmlf)
+	close(xmlf)
+	
+	d = Dict("d1" => "ds3")
+	dlen = 0
+	for sline in inlines
+		if contains(sline,"tab ds")
+			
+			spline = split(sline)
+			splsplinei = split(spline[2],".")
+			for j = 3:length(spline)
+				dlen+=1
+				splspline = split(spline[j],":")
+				d[splspline[2]] = splsplinei[1]
+			end
+		
+		end
+	end
+	dihlist = Array(Any,dlen,5)
+	ind = 0
+	for i = 1:size(xmlines,1)
+		line = xmlines[i]
+		if contains(line,"<dihedral>")
+			ind += 1
+			dnamel = xmlines[i+1]
+			dbeadsl = xmlines[i+3]
+			dname = match(r"d\d+",dnamel)
+			dbeads = split(dbeadsl)
+			beads = [0 0 0 0]
+			for j = 1:4
+				bead = match(r"\d+",dbeads[j])
+				beads[j] = parse(Int,bead.match)
+			end
+			dihline = [d[dname.match] beads]
+			dihlist[ind,:] = dihline
+		end
+	end
+	return dihlist
 end
 
 function is_solvent(label,solvent)
@@ -384,11 +450,12 @@ function get1314(f,syms)
 	return b1314
 end
 
-function gro2xml(infile,topfile,outfile;bb1314=false,syms="allinputsym.txt",f1314="mapped.xml",solvent="W",ff="martini",fffile="martini.itp")
+function gro2xml(infile,topfile,outfile;bb1314=false,syms="allinputsym.txt",f1314="mapped.xml",dihtype="type9",solvent="W",ff="martini",fffile="martini.itp")
 	#currently assumes just one type of molecule + solvent
 	#if we also want to write in 1-3 and 1-4 bonds, we need to know the table names, and we need to know the correct table symmetries and table orders.  The bonds themselves are written into the mapped.xml file used to pass to VOTCA, while their resulting symmetries show up in the input file passed to VOTCA to write out the tables
 	(natoms,box,posvel,labels) = readGro(infile)
-	(atomnamelist,bondlist,anglist,dihlist) = readTop(topfile)
+	(atomnamelist,bondlist,anglist,dihlist) = readTop(topfile,dtype=dihtype)
+	natpermol = size(atomnamelist,1) #number of atoms per molecule
 	if bb1314
 	#we are enforcing 1-3 1-4 bonds or at least putting them into the xml file
 		bonds1314 = get1314(f1314,syms) #this gives a list of lines to be added to the output file
@@ -441,7 +508,11 @@ function gro2xml(infile,topfile,outfile;bb1314=false,syms="allinputsym.txt",f131
 				currindd += size(dihlist,1)
 				listind = 1
 			end
-			println(out,atomnamelist[listind])
+			perind = listind % natpermol
+			if perind == 0
+				perind = natpermol
+			end
+			println(out,atomnamelist[perind])
 			listind += 1
 			prev = labels[i]
 		end
@@ -459,7 +530,11 @@ function gro2xml(infile,topfile,outfile;bb1314=false,syms="allinputsym.txt",f131
 			    	println(out,solvent)
 			end
 		else
-			println(out,massDict[atomnamelist[listind]])
+			perind = listind % natpermol
+			if perind == 0
+				perind = natpermol
+			end
+			println(out,massDict[atomnamelist[perind]]) #take care of multiple molecules, assumes solute molecules come before solvent molecules in the file
 			listind+=1	
 		end
 	end
